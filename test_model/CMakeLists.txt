@@ -33,7 +33,7 @@ set(DNN_LIB_PATH "/usr/lib/")
 include_directories(${DNN_PATH})
 link_directories(${DNN_LIB_PATH})
 
-add_executable(main main.cc)
+add_executable(main nv12_modified.cpp)
 target_link_libraries(main
                       ${OpenCV_LIBS}
                       dnn

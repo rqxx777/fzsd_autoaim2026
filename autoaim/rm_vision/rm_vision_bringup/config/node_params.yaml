@@ -26,28 +26,49 @@
     image_topic: "/image_raw"
     detect_color: 0
 
-    yolo.model_path: "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_detect_640x640_bayese_rgb_modified.bin"
-    yolo.score_threshold: 0.50
+    yolo.model_path: "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_nv12_0526_modifier.bin"
+    yolo.score_threshold: 0.70
     yolo.nms_threshold: 0.50
     yolo.nms_top_k: 300
     yolo.anchors: [10.0, 13.0, 16.0, 30.0, 33.0, 23.0, 30.0, 61.0, 62.0, 45.0, 59.0, 119.0, 116.0, 90.0, 156.0, 198.0, 373.0, 326.0]
 
+# /armor_tracker:
+#   ros__parameters:
+#     target_frame: odom
+#     max_armor_distance: 10.0
+
+#     ekf:
+#       sigma2_q_xyz: 1.0
+#       sigma2_q_yaw: 50.0
+#       sigma2_q_r: 500.0
+
+#       r_xyz_factor: 4e-4
+#       r_yaw: 5e-2
+
+#     tracker:
+#       max_match_distance: 0.5
+#       max_match_yaw_diff: 1.0
+
+#       tracking_thres: 5
+#       lost_time_thres: 1.0
 /armor_tracker:
   ros__parameters:
     target_frame: odom
-    max_armor_distance: 10.0
+    max_armor_distance: 15.0
 
     ekf:
-      sigma2_q_xyz: 1.0
-      sigma2_q_yaw: 50.0
+      sigma2_q_xyz_max: 3.0
+      sigma2_q_xyz_min: 1.0
+      sigma2_q_yaw_max: 6.0
+      sigma2_q_yaw_min: 3.0
       sigma2_q_r: 40.0
 
       r_xyz_factor: 4e-4
-      r_yaw: 5e-2
+      r_yaw: 8e-3
 
     tracker:
       max_match_distance: 0.5
-      max_match_yaw_diff: 1.0
+      max_match_yaw_diff: 0.8
 
       tracking_thres: 5
       lost_time_thres: 1.0

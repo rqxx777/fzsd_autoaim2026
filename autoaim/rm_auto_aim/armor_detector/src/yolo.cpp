@@ -203,6 +203,28 @@ struct Yolo::Impl
     }
   }
 
+  static std::array<cv::Point2f, 4> reorderKptsToTLBLBRTR(const std::array<cv::Point2f, 4> & pts)
+  {
+    std::array<cv::Point2f, 4> sorted = pts;
+    std::sort(sorted.begin(), sorted.end(), [](const cv::Point2f & a, const cv::Point2f & b) {
+      if (std::abs(a.y - b.y) < 1e-4f) {
+        return a.x < b.x;
+      }
+      return a.y < b.y;
+    });
+
+    std::array<cv::Point2f, 2> top = {sorted[0], sorted[1]};
+    std::array<cv::Point2f, 2> bottom = {sorted[2], sorted[3]};
+    if (top[0].x > top[1].x) {
+      std::swap(top[0], top[1]);
+    }
+    if (bottom[0].x > bottom[1].x) {
+      std::swap(bottom[0], bottom[1]);
+    }
+
+    return {top[0], bottom[0], bottom[1], top[1]};
+  }
+
   static void letterboxImage(
     const cv::Mat & img, int dst_w, int dst_h, cv::Mat & out,
     float & scale, int & x_shift, int & y_shift)
@@ -392,7 +414,8 @@ struct Yolo::Impl
             points[pt] = cv::Point2f(ox, oy);
           }
 
-          std::array<cv::Point2f, 4> kpts = {points[0], points[3], points[2], points[1]};
+          std::array<cv::Point2f, 4> kpts_raw = {points[0], points[3], points[2], points[1]};
+          std::array<cv::Point2f, 4> kpts = reorderKptsToTLBLBRTR(kpts_raw);
 
           float minx = kpts[0].x;
           float maxx = kpts[0].x;
@@ -418,8 +441,12 @@ struct Yolo::Impl
           det.color_idx = color_idx;
           det.cls_idx = cls_idx;
           det.obj = obj;
-          det.cls_score = cls_max;
-          det.score = obj;
+          det.cls_score = sigmoid(cls_max);
+          det.score = det.obj * det.cls_score;
+
+          if (det.score < params.score_threshold) {
+            continue;
+          }
 
           raw_dets.emplace_back(det);
           nms_boxes.emplace_back(rect);

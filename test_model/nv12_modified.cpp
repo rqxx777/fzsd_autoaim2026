@@ -36,12 +36,12 @@
     #define DEFAULT_MODEL_PATH "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_nv12_0526_modifier.bin"  // 默认模型路径
     #define DEFAULT_SINGLE_IMAGE_PATH "/home/sunrise/dataset/000031.jpg"  // 单图模式输入图像
     #define DEFAULT_OUTPUT_IMAGE_PATH "cpp_result.jpg"                  // 单图模式输出图像
-    #define DEFAULT_VIDEO_PATH "/home/ylee/sp_vision_25/assets/demo.avi"         // 视频模式输入路径
+    #define DEFAULT_VIDEO_PATH "/home/sunrise/dataset/demo.avi"         // 视频模式输入路径
     #define DEFAULT_OUTPUT_VIDEO_PATH "cpp_result.mp4"                   // 视频模式输出路径
     #define DEFAULT_CLASSES_NUM CLASS_CLASS_COUNT  // 默认类别数量
     #define DEFAULT_NMS_THRESHOLD 0.45f    // 非极大值抑制阈值
-    #define DEFAULT_SCORE_THRESHOLD 0.65f  // 置信度阈值（对齐 infer_onnx.py）
-    #define DEFAULT_NMS_TOP_K 300          // NMS保留的最大框数
+    #define DEFAULT_SCORE_THRESHOLD 0.80f  // 置信度阈值（对齐 infer_onnx.py）
+    #define DEFAULT_NMS_TOP_K 10          // NMS保留的最大框数
     #define DEFAULT_FONT_SIZE 1.0f         // 绘制文字大小
     #define DEFAULT_FONT_THICKNESS 1.0f    // 绘制文字粗细
     #define DEFAULT_LINE_SIZE 2.0f         // 绘制线条粗细
@@ -1051,16 +1051,6 @@
             }
 
                 writer.write(output_frame);
-            
-    #if ENABLE_DRAW
-            // 显示结果
-            cv::imshow("Real-time Detection", output_frame);
-            
-            // 按'q'退出
-            if (cv::waitKey(1) == 'q') {
-                break;
-            }
-    #endif
         }
         
     #if ENABLE_DRAW
