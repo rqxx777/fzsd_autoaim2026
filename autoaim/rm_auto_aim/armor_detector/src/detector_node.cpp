@@ -17,6 +17,7 @@
 
 // STD
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <fstream>
 #include <memory>
@@ -37,6 +38,8 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions & options)
   const std::string camera_info_topic =
     this->declare_parameter("camera_info_topic", std::string("/camera_info"));
   const std::string image_topic = this->declare_parameter("image_topic", std::string("/image_raw"));
+  use_hik_sdk_ = this->declare_parameter("input.use_hik_sdk", true);
+  direct_frame_id_ = this->declare_parameter("input.frame_id", std::string("camera_optical_frame"));
 
   // Detector
   detector_ = initDetector();
@@ -90,18 +93,66 @@ ArmorDetectorNode::ArmorDetectorNode(const rclcpp::NodeOptions & options)
       debug_ ? createDebugPublishers() : destroyDebugPublishers();
     });
 
-  cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-    camera_info_topic, rclcpp::SensorDataQoS().keep_last(1),
-    [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr camera_info) {
-      cam_center_ = cv::Point2f(camera_info->k[2], camera_info->k[5]);
-      cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(*camera_info);
-      pnp_solver_ = std::make_unique<PnPSolver>(camera_info->k, camera_info->d);
-      cam_info_sub_.reset();
-    });
+  if (use_hik_sdk_) {
+    initPnpSolverFromParams();
+    startHikInput();
+  } else {
+    cam_info_sub_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+      camera_info_topic, rclcpp::SensorDataQoS().keep_last(1),
+      [this](sensor_msgs::msg::CameraInfo::ConstSharedPtr camera_info) {
+        cam_center_ = cv::Point2f(camera_info->k[2], camera_info->k[5]);
+        cam_info_ = std::make_shared<sensor_msgs::msg::CameraInfo>(*camera_info);
+        pnp_solver_ = std::make_unique<PnPSolver>(camera_info->k, camera_info->d);
+        cam_info_sub_.reset();
+      });
 
-  img_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
-    image_topic, rclcpp::SensorDataQoS().keep_last(1),
-    std::bind(&ArmorDetectorNode::imageCallback, this, std::placeholders::_1));
+    img_sub_ = this->create_subscription<sensor_msgs::msg::Image>(
+      image_topic, rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&ArmorDetectorNode::imageCallback, this, std::placeholders::_1));
+  }
+
+  infer_running_.store(true);
+  infer_thread_ = std::thread(&ArmorDetectorNode::inferenceLoop, this);
+}
+
+ArmorDetectorNode::~ArmorDetectorNode()
+{
+  stopHikInput();
+  infer_running_.store(false);
+  infer_cv_.notify_all();
+  if (infer_thread_.joinable()) {
+    infer_thread_.join();
+  }
+}
+
+void ArmorDetectorNode::initPnpSolverFromParams()
+{
+  const auto camera_matrix_v = this->declare_parameter("camera_matrix", std::vector<double>{});
+  const auto dist_coeffs_v = this->declare_parameter("distortion_coefficients", std::vector<double>{});
+
+  if (camera_matrix_v.size() != 9 || dist_coeffs_v.size() < 5) {
+    throw std::runtime_error(
+      "input.use_hik_sdk=true requires camera_matrix(9) and distortion_coefficients(>=5)");
+  }
+
+  std::array<double, 9> camera_matrix{};
+  for (size_t i = 0; i < 9; ++i) {
+    camera_matrix[i] = camera_matrix_v[i];
+  }
+  std::vector<double> dist_coeffs(dist_coeffs_v.begin(), dist_coeffs_v.begin() + 5);
+
+  cam_center_ = cv::Point2f(static_cast<float>(camera_matrix[2]), static_cast<float>(camera_matrix[5]));
+  pnp_solver_ = std::make_unique<PnPSolver>(camera_matrix, dist_coeffs);
+}
+
+void ArmorDetectorNode::enqueueImage(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg)
+{
+  {
+    std::lock_guard<std::mutex> lock(infer_mutex_);
+    pending_img_msg_ = img_msg;
+    has_pending_img_ = true;
+  }
+  infer_cv_.notify_one();
 }
 
 void ArmorDetectorNode::taskCallback(const std_msgs::msg::String::SharedPtr task_msg)
@@ -116,6 +167,90 @@ void ArmorDetectorNode::taskCallback(const std_msgs::msg::String::SharedPtr task
 
 void ArmorDetectorNode::imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr img_msg)
 {
+  enqueueImage(img_msg);
+}
+
+void ArmorDetectorNode::startHikInput()
+{
+  hik_exposure_time_ = this->declare_parameter("hik.exposure_time", 3000.0);
+  hik_gain_ = this->declare_parameter("hik.gain", 10.0);
+  hik_get_timeout_ms_ = this->declare_parameter("hik.get_timeout_ms", 1000);
+
+  std::string err;
+  if (!hik_camera_source_.open(hik_exposure_time_, hik_gain_, hik_get_timeout_ms_, &err)) {
+    throw std::runtime_error("Failed to open Hik camera source: " + err);
+  }
+
+  capture_running_.store(true);
+  capture_thread_ = std::thread(&ArmorDetectorNode::captureLoop, this);
+}
+
+void ArmorDetectorNode::stopHikInput()
+{
+  capture_running_.store(false);
+  if (capture_thread_.joinable()) {
+    capture_thread_.join();
+  }
+  hik_camera_source_.close();
+}
+
+void ArmorDetectorNode::captureLoop()
+{
+  while (rclcpp::ok() && capture_running_.load()) {
+    hik_camera::HikFrame frame;
+    std::string err;
+    if (!hik_camera_source_.read(frame, &err)) {
+      continue;
+    }
+
+    const auto width = static_cast<size_t>(frame.bgr.cols);
+    const auto height = static_cast<size_t>(frame.bgr.rows);
+    if (width == 0 || height == 0) {
+      continue;
+    }
+
+    auto img_msg = std::make_shared<sensor_msgs::msg::Image>();
+    // Use ROS clock here so detector/tracker timestamps are in the same time domain as TF cache.
+    img_msg->header.stamp = this->now();
+    img_msg->header.frame_id = direct_frame_id_;
+    img_msg->height = static_cast<uint32_t>(height);
+    img_msg->width = static_cast<uint32_t>(width);
+    img_msg->encoding = "bgr8";
+    img_msg->is_bigendian = false;
+    img_msg->step = static_cast<sensor_msgs::msg::Image::_step_type>(width * 3);
+    img_msg->data.assign(frame.bgr.datastart, frame.bgr.dataend);
+    enqueueImage(img_msg);
+  }
+}
+
+void ArmorDetectorNode::inferenceLoop()
+{
+  while (rclcpp::ok()) {
+    sensor_msgs::msg::Image::ConstSharedPtr img_msg;
+    {
+      std::unique_lock<std::mutex> lock(infer_mutex_);
+      infer_cv_.wait(lock, [this]() {
+        return !infer_running_.load() || has_pending_img_;
+      });
+
+      if (!infer_running_.load() && !has_pending_img_) {
+        return;
+      }
+
+      img_msg = pending_img_msg_;
+      has_pending_img_ = false;
+    }
+
+    processImage(img_msg);
+  }
+}
+
+void ArmorDetectorNode::processImage(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg)
+{
+  if (!img_msg) {
+    return;
+  }
+
   auto armors = detectArmors(img_msg);
 
   if (pnp_solver_ != nullptr && is_aim_task_) {
@@ -200,7 +335,9 @@ std::unique_ptr<Detector> ArmorDetectorNode::initDetector()
   yolo_params.score_threshold =
     static_cast<float>(this->declare_parameter("yolo.score_threshold", 0.65));
   yolo_params.nms_threshold = static_cast<float>(this->declare_parameter("yolo.nms_threshold", 0.45));
+  yolo_params.pre_nms_top_k = this->declare_parameter("yolo.pre_nms_top_k", 500);
   yolo_params.nms_top_k = this->declare_parameter("yolo.nms_top_k", 300);
+  yolo_pre_nms_top_k_ = yolo_params.pre_nms_top_k;
   yolo_nms_top_k_ = yolo_params.nms_top_k;
   {
     const std::vector<double> default_anchors = {
@@ -248,6 +385,7 @@ std::vector<Armor> ArmorDetectorNode::detectArmors(
     static_cast<float>(get_parameter("yolo.score_threshold").as_double()),
     static_cast<float>(get_parameter("yolo.nms_threshold").as_double()),
     yolo_nms_top_k_);
+  detector_->setYoloPreNmsTopK(get_parameter("yolo.pre_nms_top_k").as_int());
 
   auto armors = detector_->detect(img);
   const auto yolo_t = detector_->lastYoloTimings();

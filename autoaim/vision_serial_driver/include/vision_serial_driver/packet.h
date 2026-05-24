@@ -36,9 +36,7 @@ struct inf_visionMsg
     uint8_t tracking; // 跟踪标志
     float aimYaw;     // 目标Yaw
     float aimPitch;   // 目标Pitch
-    // float vx;
-    // float vy;
-    // float wz;
+
 };
 
 struct inf_robotMsg

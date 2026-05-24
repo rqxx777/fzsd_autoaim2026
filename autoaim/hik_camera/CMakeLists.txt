@@ -13,13 +13,15 @@ add_definitions(-Wall -Werror)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(ament_cmake_auto REQUIRED)
+find_package(OpenCV REQUIRED)
 ament_auto_find_build_dependencies()
 
 ament_auto_add_library(${PROJECT_NAME} SHARED
+  src/hik_camera_source.cpp
   src/hik_camera_node.cpp
 )
 
-target_include_directories(${PROJECT_NAME} PUBLIC hikSDK/include)
+target_include_directories(${PROJECT_NAME} PUBLIC include hikSDK/include)
 
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64")
   target_link_directories(${PROJECT_NAME} PUBLIC hikSDK/lib/amd64)
@@ -38,16 +40,20 @@ else()
 endif()
 
 target_link_libraries(${PROJECT_NAME}
+  ${OpenCV_LIBS}
   FormatConversion
   MediaProcess
   MvCameraControl
-  MVRender
   MvUsb3vTL
 )
 
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN hik_camera::HikCameraNode
   EXECUTABLE ${PROJECT_NAME}_node
+)
+
+install(DIRECTORY include/
+  DESTINATION include
 )
 
 if(BUILD_TESTING)

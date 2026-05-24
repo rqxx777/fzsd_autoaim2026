@@ -5,6 +5,7 @@
 #include "armor_tracker/tracker_node.hpp"
 
 // STD
+#include <chrono>
 #include <cmath>
 #include <memory>
 #include <vector>
@@ -206,6 +207,9 @@ ArmorTrackerNode::ArmorTrackerNode(const rclcpp::NodeOptions & options)
 
 void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::SharedPtr armors_msg)
 {
+  const auto callback_start = std::chrono::steady_clock::now();
+  const double recv_latency_ms = (this->now() - armors_msg->header.stamp).seconds() * 1000.0;
+
   // Tranform armor position from image frame to world coordinate
   for (auto & armor : armors_msg->armors) {
     geometry_msgs::msg::PoseStamped ps;
@@ -245,8 +249,16 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
     dt_ = (time - last_time_).seconds();
     tracker_->lost_thres = static_cast<int>(lost_time_thres_ / dt_);
 
+    const auto ekf_start = std::chrono::steady_clock::now();
     tracker_->update(armors_msg);
+    const auto ekf_end = std::chrono::steady_clock::now();
+    const double ekf_time_ms =
+      std::chrono::duration<double, std::milli>(ekf_end - ekf_start).count();
+    RCLCPP_DEBUG_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "Single EKF cycle time: %.3f ms", ekf_time_ms);
 
+    
     // Publish Info
     info_msg.position_diff = tracker_->info_position_diff;
     info_msg.yaw_diff = tracker_->info_yaw_diff;
@@ -285,8 +297,19 @@ void ArmorTrackerNode::armorsCallback(const auto_aim_interfaces::msg::Armors::Sh
   last_time_ = time;
 
   target_pub_->publish(target_msg);
+  const auto target_pub_end = std::chrono::steady_clock::now();
+  const double recv_to_target_pub_ms =
+    std::chrono::duration<double, std::milli>(target_pub_end - callback_start).count();
 
   publishMarkers(target_msg);
+  const auto callback_end = std::chrono::steady_clock::now();
+  const double callback_total_ms =
+    std::chrono::duration<double, std::milli>(callback_end - callback_start).count();
+
+  RCLCPP_DEBUG_THROTTLE(
+    this->get_logger(), *this->get_clock(), 1000,
+    "Callback timing [ms]: recv_latency=%.3f, recv_to_target_pub=%.3f, total=%.3f",
+    recv_latency_ms, recv_to_target_pub_ms, callback_total_ms);
 }
 
 void ArmorTrackerNode::publishMarkers(const auto_aim_interfaces::msg::Target & target_msg)

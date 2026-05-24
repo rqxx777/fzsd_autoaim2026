@@ -42,6 +42,7 @@ Detector::Detector(
   yolo_params.model_path = yolo.model_path;
   yolo_params.score_threshold = yolo.score_threshold;
   yolo_params.nms_threshold = yolo.nms_threshold;
+  yolo_params.pre_nms_top_k = yolo.pre_nms_top_k;
   yolo_params.nms_top_k = yolo.nms_top_k;
   yolo_params.anchors = yolo.anchors;
   yolo_params.detect_color = detect_color;
@@ -106,6 +107,14 @@ void Detector::setYoloThresholds(float score_threshold, float nms_threshold, int
   yolo_->setScoreThreshold(score_threshold);
   yolo_->setNmsThreshold(nms_threshold);
   yolo_->setNmsTopK(nms_top_k);
+}
+
+void Detector::setYoloPreNmsTopK(int pre_nms_top_k)
+{
+  if (!yolo_) {
+    return;
+  }
+  yolo_->setPreNmsTopK(pre_nms_top_k);
 }
 
 void Detector::setYoloAnchors(const std::vector<float> & anchors)

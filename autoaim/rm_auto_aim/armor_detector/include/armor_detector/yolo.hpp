@@ -23,6 +23,7 @@ public:
     std::string model_path;
     float score_threshold = 0.65f;
     float nms_threshold = 0.45f;
+    int pre_nms_top_k = 500;
     int nms_top_k = 300;
     // 18 floats: s(3*2), m(3*2), l(3*2)
     std::vector<float> anchors;
@@ -67,6 +68,7 @@ public:
   void setDetectColor(int detect_color);
   void setScoreThreshold(float score_threshold);
   void setNmsThreshold(float nms_threshold);
+  void setPreNmsTopK(int pre_nms_top_k);
   void setNmsTopK(int nms_top_k);
   void setAnchors(const std::vector<float> & anchors);
 

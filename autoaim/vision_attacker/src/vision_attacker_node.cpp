@@ -66,6 +66,11 @@ private:
 
     void target_callback(const auto_aim_interfaces::msg::Target target_msg)
     {
+        //count time
+        const auto callback_start = std::chrono::steady_clock::now();
+        const double recv_latency_ms = (this->now() - target_msg.header.stamp).seconds() * 1000.0;
+
+
         lagTime = get_parameter("trajectory.lag_time").as_double();
         airK = get_parameter("trajectory.air_k").as_double();
         yawFix = get_parameter("trajectory.yaw_fix").as_double();
@@ -89,7 +94,14 @@ private:
         {
             aim.tracking = 0;
             aimPub->publish(aim);
-            RCLCPP_INFO(get_logger(), "aimYaw:%05.2f/aimPitch:%05.2f", aim.aim_yaw, aim.aim_pitch);
+            // RCLCPP_INFO(get_logger(), "aimYaw:%05.2f/aimPitch:%05.2f", aim.aim_yaw, aim.aim_pitch);
+            const auto callback_end = std::chrono::steady_clock::now();
+            const double recv_to_aim_pub_ms =
+                std::chrono::duration<double, std::milli>(callback_end - callback_start).count();
+            // RCLCPP_INFO_THROTTLE(
+            //     this->get_logger(), *this->get_clock(), 1000,
+            //     "VisionAttacker timing [ms]: recv_latency=%.3f, recv_to_aim_pub=%.3f, total=%.3f",
+            //     recv_latency_ms, recv_to_aim_pub_ms, recv_to_aim_pub_ms);
             return;
         }
         else
@@ -134,7 +146,19 @@ private:
             aim.aim_pitch += pitchFix;
             aim.tracking = 1;
             aimPub->publish(aim);
-            RCLCPP_INFO(get_logger(), "aimYaw:%05.2f/aimPitch:%05.2f selfYaw:%05.2f/selfPitch:%05.2f", aim.aim_yaw, aim.aim_pitch,robotPtr->self_yaw,robotPtr->self_pitch);
+
+            const auto aim_pub_end = std::chrono::steady_clock::now();
+            const double recv_to_aim_pub_ms =
+                std::chrono::duration<double, std::milli>(aim_pub_end - callback_start).count();
+            const double callback_total_ms =
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - callback_start)
+                    .count();
+            // RCLCPP_INFO_THROTTLE(
+            //     this->get_logger(), *this->get_clock(), 1000,
+            //     "VisionAttacker timing [ms]: recv_latency=%.3f, recv_to_aim_pub=%.3f, total=%.3f",
+            //     recv_latency_ms, recv_to_aim_pub_ms, callback_total_ms);
+            //RCLCPP_INFO(get_logger(), "aimYaw:%05.2f/aimPitch:%05.2f selfYaw:%05.2f/selfPitch:%05.2f", aim.aim_yaw, aim.aim_pitch,robotPtr->self_yaw,robotPtr->self_pitch);
         }
     };
 

@@ -28,6 +28,7 @@ public:
     std::string model_path;
     float score_threshold;
     float nms_threshold;
+    int pre_nms_top_k = 500;
     int nms_top_k;
     std::vector<float> anchors;
   };
@@ -36,6 +37,7 @@ public:
 
   std::vector<Armor> detect(const cv::Mat & input);
   void setYoloThresholds(float score_threshold, float nms_threshold, int nms_top_k);
+  void setYoloPreNmsTopK(int pre_nms_top_k);
   void setYoloAnchors(const std::vector<float> & anchors);
 
   Yolo::Timings lastYoloTimings() const;

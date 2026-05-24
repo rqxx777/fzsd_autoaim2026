@@ -1,18 +1,7 @@
-/hik_camera:
-  ros__parameters:
-    camera_info_url: package://rm_vision_bringup/config/camera_info.yaml
-    exposure_time: 2000
-    gain: 5.0
 
-/camera_node:
+/vision_serial_driver:
   ros__parameters:
-    camera_info_url: package://rm_vision_bringup/config/camera_info.yaml
-    exposure_time: 2000
-    gain: 5.0
-
-/serial_driver:
-  ros__parameters:
-    timestamp_offset: 0.006
+    timestamp_offset: 0.005
     device_name: /dev/ttyACM0
     baud_rate: 115200
     flow_control: none
@@ -24,7 +13,17 @@
     debug: true
     camera_info_topic: "/camera_info"
     image_topic: "/image_raw"
-    detect_color: 0
+    detect_color: 1
+
+    input.use_hik_sdk: true
+    hik.exposure_time : 2000.0
+    hik.gain: 6.0
+    hik.get_timeout_ms: 1000
+
+    camera_matrix: [2411.22355 ,    0.     ,  713.25974,
+                        0.     , 2408.35776,  551.91509,
+                        0.     ,    0.     ,    1.     ]
+    distortion_coefficients: [-0.047592, 0.234074, -0.002274, 0.001522, 0.000000]
 
     yolo.model_path: "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_nv12_0526_modifier.bin"
     yolo.score_threshold: 0.70
@@ -32,43 +31,36 @@
     yolo.nms_top_k: 300
     yolo.anchors: [10.0, 13.0, 16.0, 30.0, 33.0, 23.0, 30.0, 61.0, 62.0, 45.0, 59.0, 119.0, 116.0, 90.0, 156.0, 198.0, 373.0, 326.0]
 
-# /armor_tracker:
-#   ros__parameters:
-#     target_frame: odom
-#     max_armor_distance: 10.0
 
-#     ekf:
-#       sigma2_q_xyz: 1.0
-#       sigma2_q_yaw: 50.0
-#       sigma2_q_r: 500.0
-
-#       r_xyz_factor: 4e-4
-#       r_yaw: 5e-2
-
-#     tracker:
-#       max_match_distance: 0.5
-#       max_match_yaw_diff: 1.0
-
-#       tracking_thres: 5
-#       lost_time_thres: 1.0
 /armor_tracker:
   ros__parameters:
     target_frame: odom
     max_armor_distance: 15.0
 
     ekf:
-      sigma2_q_xyz_max: 3.0
-      sigma2_q_xyz_min: 1.0
-      sigma2_q_yaw_max: 6.0
-      sigma2_q_yaw_min: 3.0
+      sigma2_q_xyz_max: 2.5
+      sigma2_q_xyz_min: 0.9
+      sigma2_q_yaw_max: 10.0
+      sigma2_q_yaw_min: 6.0
       sigma2_q_r: 40.0
 
-      r_xyz_factor: 4e-4
+      # r_xyz_factor: 6.5e-4
+      # r_yaw: 8e-3
+      
+      # sigma2_q_xyz_max: 2.5
+      # sigma2_q_xyz_min: 0.9
+      # # sigma2_q_yaw_max: 1e-2
+      # sigma2_q_yaw_max: 6.0
+      # # sigma2_q_yaw_min: 6e-3
+      # sigma2_q_yaw_min: 3.0
+      # sigma2_q_r: 40.0
+
+      r_xyz_factor: 3e-4
       r_yaw: 8e-3
 
     tracker:
-      max_match_distance: 0.5
-      max_match_yaw_diff: 0.8
+      max_match_distance: 0.8
+      max_match_yaw_diff: 3.5
 
       tracking_thres: 5
       lost_time_thres: 1.0
@@ -76,14 +68,17 @@
 /vision_attacker:
   ros__parameters:
     trajectory:
-      lag_time: 0.1
+      lag_time: 0.09
+      # air_k:0.027
       air_k: 0.04
-      yaw_fix: 0.5
-      pitch_fix: -0.5
+      yaw_fix: 0.3
+      pitch_fix: 1.2
     fire_ctrl:
-      car_attack_threshold: 85.0
+      car_attack_threshold: 35.0
       outpost_attack_threshold: 5.0
       threshold_fix: 0.0
+      yaw_threshold: 1.0
+      pitch_threshold: 1.0
 
 # /rm_auto_record:
 #   ros__parameters:

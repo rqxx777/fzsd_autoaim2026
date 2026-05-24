@@ -7,6 +7,7 @@
     #include <sstream>
     #include <array>
     #include <cmath>
+    #include <numeric>
 
     // OpenCV库
     #include <opencv2/opencv.hpp>      // OpenCV主要头文件
@@ -33,24 +34,27 @@
 
     // 模型和检测相关的默认参数定义
     // ========================= 集中配置区（建议只改这里） =========================
-    #define DEFAULT_MODEL_PATH "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_nv12_0526_modifier.bin"  // 默认模型路径
-    #define DEFAULT_SINGLE_IMAGE_PATH "/home/sunrise/dataset/000031.jpg"  // 单图模式输入图像
+    #define DEFAULT_MODEL_PATH "/home/sunrise/Inference-for-RDKx5/autoaim/model/yolov5_nv12_0526_modifier_modified.bin"  // 默认模型路径
+    #define DEFAULT_SINGLE_IMAGE_PATH "/home/sunrise/dataset/001054.jpg"  // 单图模式输入图像
     #define DEFAULT_OUTPUT_IMAGE_PATH "cpp_result.jpg"                  // 单图模式输出图像
-    #define DEFAULT_VIDEO_PATH "/home/sunrise/dataset/demo.avi"         // 视频模式输入路径
+    #define DEFAULT_VIDEO_PATH "/home/ylee/sp_vision_25/assets/demo.avi"         // 视频模式输入路径
     #define DEFAULT_OUTPUT_VIDEO_PATH "cpp_result.mp4"                   // 视频模式输出路径
     #define DEFAULT_CLASSES_NUM CLASS_CLASS_COUNT  // 默认类别数量
     #define DEFAULT_NMS_THRESHOLD 0.45f    // 非极大值抑制阈值
-    #define DEFAULT_SCORE_THRESHOLD 0.80f  // 置信度阈值（对齐 infer_onnx.py）
-    #define DEFAULT_NMS_TOP_K 10          // NMS保留的最大框数
+    #define DEFAULT_SCORE_THRESHOLD 0.65f  // 置信度阈值（对齐 infer_onnx.py）
+    #define DEFAULT_PRE_NMS_TOP_K 100      // NMS前预筛候选上限(按置信度)
+    #define DEFAULT_NMS_TOP_K 300          // NMS保留的最大框数
     #define DEFAULT_FONT_SIZE 1.0f         // 绘制文字大小
     #define DEFAULT_FONT_THICKNESS 1.0f    // 绘制文字粗细
     #define DEFAULT_LINE_SIZE 2.0f         // 绘制线条粗细
     #define OUTPUT_FEATURE_DIM 22
     #define COLOR_CLASS_COUNT 4
     #define CLASS_CLASS_COUNT 9
+    #define ENABLE_VERBOSE_LOG 0           // 详细日志开关: 0-关闭, 1-开启
+    #define PERF_PRINT_INTERVAL 30         // 性能日志打印间隔(帧)
 
     // 运行模式选择
-    #define DETECT_MODE 1    // 检测模式: 0-单张图片, 1-实时检测
+    #define DETECT_MODE 0    // 检测模式: 0-单张图片, 1-实时检测
     #define ENABLE_DRAW 1    // 绘图开关: 0-禁用, 1-启用
     #define LOAD_FROM_DDR 1  // 模型加载方式: 0-从文件加载, 1-从内存加载
 
@@ -91,6 +95,7 @@
                     int classes_num = DEFAULT_CLASSES_NUM,
                     float nms_threshold = DEFAULT_NMS_THRESHOLD,
                     float score_threshold = DEFAULT_SCORE_THRESHOLD,
+                    int pre_nms_top_k = DEFAULT_PRE_NMS_TOP_K,
                     int nms_top_k = DEFAULT_NMS_TOP_K);
         
         // 析构函数：释放资源
@@ -137,6 +142,7 @@
         int classes_num_;             // 类别数量（兼容旧参数，不用于新后处理类别数）
         float nms_threshold_;         // NMS阈值
         float score_threshold_;       // 置信度阈值
+        int pre_nms_top_k_;          // NMS前按置信度预筛的候选上限
         int nms_top_k_;              // NMS保留的最大框数
         bool is_initialized_;         // 初始化状态标志
         float font_size_;            // 绘制文字大小
@@ -163,6 +169,8 @@
         // 检测结果存储
         std::vector<DetectionResult> detections_;
         std::vector<int> nms_indices_;
+        std::vector<cv::Rect> nms_boxes_;
+        std::vector<float> nms_confidences_;
         
         // 图像处理参数
         float x_scale_;                          // X方向缩放比例
@@ -187,11 +195,13 @@
                             int classes_num,
                             float nms_threshold,
                             float score_threshold,
+                            int pre_nms_top_k,
                             int nms_top_k)
         : model_path_(model_path),
         classes_num_(classes_num),
         nms_threshold_(nms_threshold),
         score_threshold_(score_threshold),
+        pre_nms_top_k_(pre_nms_top_k),
         nms_top_k_(nms_top_k),
         is_initialized_(false),
         font_size_(DEFAULT_FONT_SIZE),
@@ -562,15 +572,19 @@
                 total_end - total_start).count() / 1000.0f;
         }
         
-        // 打印时间统计
-        std::cout << "\n============ Time Statistics ============" << std::endl;
-        std::cout << "Preprocess time: " << std::fixed << std::setprecision(2) << preprocess_time << " ms" << std::endl;
-        std::cout << "Inference time: " << std::fixed << std::setprecision(2) << infer_time << " ms" << std::endl;
-        std::cout << "Postprocess time: " << std::fixed << std::setprecision(2) << postprocess_time << " ms" << std::endl;
-        std::cout << "Draw time: " << std::fixed << std::setprecision(2) << draw_time << " ms" << std::endl;
-        std::cout << "Total time: " << std::fixed << std::setprecision(2) << total_time << " ms" << std::endl;
-        std::cout << "FPS: " << std::fixed << std::setprecision(2) << 1000.0f / total_time << std::endl;
-        std::cout << "======================================\n" << std::endl;
+        // 实时场景下降低stdout开销，按固定间隔打印性能
+        static int frame_counter = 0;
+        ++frame_counter;
+        if ((DETECT_MODE == 0) || ((frame_counter % PERF_PRINT_INTERVAL) == 0)) {
+            std::cout << "\n============ Time Statistics ============" << std::endl;
+            std::cout << "Preprocess time: " << std::fixed << std::setprecision(2) << preprocess_time << " ms" << std::endl;
+            std::cout << "Inference time: " << std::fixed << std::setprecision(2) << infer_time << " ms" << std::endl;
+            std::cout << "Postprocess time: " << std::fixed << std::setprecision(2) << postprocess_time << " ms" << std::endl;
+            std::cout << "Draw time: " << std::fixed << std::setprecision(2) << draw_time << " ms" << std::endl;
+            std::cout << "Total time: " << std::fixed << std::setprecision(2) << total_time << " ms" << std::endl;
+            std::cout << "FPS: " << std::fixed << std::setprecision(2) << 1000.0f / total_time << std::endl;
+            std::cout << "======================================\n" << std::endl;
+        }
 
     cleanup:
         // 清理资源
@@ -695,16 +709,34 @@
         ProcessFeatureMap(output_tensors_[output_order_[1]], H_16, W_16, m_anchors_);
         ProcessFeatureMap(output_tensors_[output_order_[2]], H_8, W_8, s_anchors_);
 
-        std::vector<cv::Rect> boxes;
-        std::vector<float> confidences;
-        boxes.reserve(detections_.size());
-        confidences.reserve(detections_.size());
-        for (const auto& det : detections_) {
-            boxes.push_back(det.box);
-            confidences.push_back(det.confidence);
+        // NMS前先按置信度预筛，降低NMS输入规模。
+        if (pre_nms_top_k_ > 0 && static_cast<int>(detections_.size()) > pre_nms_top_k_) {
+            std::vector<int> order(detections_.size());
+            std::iota(order.begin(), order.end(), 0);
+            auto conf_greater = [&](int a, int b) {
+                return detections_[a].confidence > detections_[b].confidence;
+            };
+            std::nth_element(order.begin(), order.begin() + pre_nms_top_k_, order.end(), conf_greater);
+            order.resize(pre_nms_top_k_);
+
+            std::vector<DetectionResult> filtered;
+            filtered.reserve(order.size());
+            for (size_t i = 0; i < order.size(); ++i) {
+                filtered.push_back(detections_[order[i]]);
+            }
+            detections_.swap(filtered);
         }
 
-        cv::dnn::NMSBoxes(boxes, confidences, score_threshold_, nms_threshold_, nms_indices_, 1.f, nms_top_k_);
+        nms_boxes_.clear();
+        nms_confidences_.clear();
+        nms_boxes_.reserve(detections_.size());
+        nms_confidences_.reserve(detections_.size());
+        for (const auto& det : detections_) {
+            nms_boxes_.push_back(det.box);
+            nms_confidences_.push_back(det.confidence);
+        }
+
+        cv::dnn::NMSBoxes(nms_boxes_, nms_confidences_, score_threshold_, nms_threshold_, nms_indices_, 1.f, nms_top_k_);
         
         return true;
     }
@@ -800,132 +832,222 @@
             }
         }
     #endif
-        // 打印检测结果
+    #if ENABLE_VERBOSE_LOG || (DETECT_MODE == 0)
+        // 详细调试时打印检测结果
         PrintResults();
+    #endif
     }
 
     // 特征图处理辅助函数
     void BPU_Detect::ProcessFeatureMap(hbDNNTensor& output_tensor, 
                                     int height, int width,
                                     const std::vector<std::pair<double, double>>& anchors) {
-        // 检查量化类型
-        if (output_tensor.properties.quantiType != NONE) {
-            std::cout << "Output tensor quantization type should be NONE!" << std::endl;
-            return;
-        }
-        
         // 刷新内存
         hbSysFlushMem(&output_tensor.sysMem[0], HB_SYS_MEM_CACHE_INVALIDATE);
-        
-        // 获取输出数据指针
-        auto* raw_data = reinterpret_cast<float*>(output_tensor.sysMem[0].virAddr);
 
-        const auto& shape = output_tensor.properties.validShape;
-        if (shape.numDimensions != 4) {
-            std::cout << "Unexpected output dims: " << shape.numDimensions << std::endl;
+        const auto& valid_shape = output_tensor.properties.validShape;
+        const auto& aligned_shape = output_tensor.properties.alignedShape;
+        if (valid_shape.numDimensions != 4 || aligned_shape.numDimensions != 4) {
+            std::cout << "Unexpected output dims: valid=" << valid_shape.numDimensions
+                      << ", aligned=" << aligned_shape.numDimensions << std::endl;
             return;
         }
 
-        const int d1 = shape.dimensionSize[1];
-        const int d2 = shape.dimensionSize[2];
-        const int d3 = shape.dimensionSize[3];
+        const int d1 = valid_shape.dimensionSize[1];
+        const int d2 = valid_shape.dimensionSize[2];
+        const int d3 = valid_shape.dimensionSize[3];
 
         const bool is_nhwc = (d1 == height && d2 == width && d3 == static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM);
         const bool is_nchw = (d1 == static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM && d2 == height && d3 == width);
         if (!is_nhwc && !is_nchw) {
             std::cout << "Output shape mismatch, got ("
-                    << shape.dimensionSize[0] << ", " << d1 << ", " << d2 << ", " << d3
+                    << valid_shape.dimensionSize[0] << ", " << d1 << ", " << d2 << ", " << d3
                     << "), expected NHWC (1," << height << "," << width << "," << static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM
                     << ") or NCHW (1," << static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM << "," << height << "," << width << ")"
                     << std::endl;
             return;
         }
 
-        auto get_value = [&](int anchor_idx, int feat_idx, int h_idx, int w_idx) -> float {
-            if (is_nhwc) {
-                const int c_idx = anchor_idx * OUTPUT_FEATURE_DIM + feat_idx;
-                const int index = ((h_idx * width + w_idx) * (static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM)) + c_idx;
-                return raw_data[index];
-            }
-            const int c_idx = anchor_idx * OUTPUT_FEATURE_DIM + feat_idx;
-            const int index = ((c_idx * height + h_idx) * width) + w_idx;
-            return raw_data[index];
-        };
-        
-        const float stride = static_cast<float>(input_h_) / static_cast<float>(height);
+        const int aligned_h = aligned_shape.dimensionSize[1];
+        const int aligned_w = aligned_shape.dimensionSize[2];
+        const int aligned_c = aligned_shape.dimensionSize[3];
 
-        // 遍历特征图的每个位置
-        for(int h = 0; h < height; h++) {
-            for(int w = 0; w < width; w++) {
-                for(size_t anchor_idx = 0; anchor_idx < anchors.size(); ++anchor_idx) {
-                    const auto& anchor = anchors[anchor_idx];
+        if (is_nhwc && (aligned_h < height || aligned_w < width || aligned_c < static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM)) {
+            std::cout << "Aligned NHWC shape is smaller than expected valid area." << std::endl;
+            return;
+        }
+        if (is_nchw && (aligned_shape.dimensionSize[1] < static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM || aligned_shape.dimensionSize[2] < height || aligned_shape.dimensionSize[3] < width)) {
+            std::cout << "Aligned NCHW shape is smaller than expected valid area." << std::endl;
+            return;
+        }
 
-                    float confidence = Sigmoid(get_value(static_cast<int>(anchor_idx), 8, h, w));
-                    if (confidence < score_threshold_) {
-                        continue;
-                    }
+        const auto& props = output_tensor.properties;
+        const int tensor_type = props.tensorType;
+        const int channel_count = static_cast<int>(anchors.size()) * OUTPUT_FEATURE_DIM;
+        const bool use_scale = (props.scale.scaleData != nullptr);
+        const float score_threshold_safe = std::min(std::max(score_threshold_, 1e-6f), 1.0f - 1e-6f);
+        const float obj_logit_thres = -std::log((1.0f / score_threshold_safe) - 1.0f);
 
-                    int color_id = 0;
-                    for (int i = 1; i < COLOR_CLASS_COUNT; ++i) {
-                        if (get_value(static_cast<int>(anchor_idx), 9 + i, h, w) >
-                            get_value(static_cast<int>(anchor_idx), 9 + color_id, h, w)) {
-                            color_id = i;
-                        }
-                    }
-
-                    int class_id = 0;
-                    for (int i = 1; i < CLASS_CLASS_COUNT; ++i) {
-                        if (get_value(static_cast<int>(anchor_idx), 13 + i, h, w) >
-                            get_value(static_cast<int>(anchor_idx), 13 + class_id, h, w)) {
-                            class_id = i;
-                        }
-                    }
-
-                    const float cls_score = Sigmoid(get_value(static_cast<int>(anchor_idx), 13 + class_id, h, w));
-                    confidence *= cls_score;
-                    if (confidence < score_threshold_) {
-                        continue;
-                    }
-
-                    std::array<cv::Point2f, 4> points;
-                    for (int pt = 0; pt < 4; ++pt) {
-                        float decoded_x = get_value(static_cast<int>(anchor_idx), pt * 2, h, w) * static_cast<float>(anchor.first)
-                                        + static_cast<float>(w) * stride;
-                        float decoded_y = get_value(static_cast<int>(anchor_idx), pt * 2 + 1, h, w) * static_cast<float>(anchor.second)
-                                        + static_cast<float>(h) * stride;
-                        points[pt] = cv::Point2f(
-                            (decoded_x - static_cast<float>(x_shift_)) / x_scale_,
-                            (decoded_y - static_cast<float>(y_shift_)) / y_scale_);
-                    }
-
-                    std::array<cv::Point2f, 4> polygon = {points[0], points[3], points[2], points[1]};
-                    float min_x = polygon[0].x;
-                    float max_x = polygon[0].x;
-                    float min_y = polygon[0].y;
-                    float max_y = polygon[0].y;
-                    for (int p = 1; p < 4; ++p) {
-                        min_x = std::min(min_x, polygon[p].x);
-                        max_x = std::max(max_x, polygon[p].x);
-                        min_y = std::min(min_y, polygon[p].y);
-                        max_y = std::max(max_y, polygon[p].y);
-                    }
-
-                    int box_w = static_cast<int>(max_x - min_x);
-                    int box_h = static_cast<int>(max_y - min_y);
-                    if (box_w <= 0 || box_h <= 0) {
-                        continue;
-                    }
-
-                    DetectionResult result;
-                    result.box = cv::Rect(static_cast<int>(min_x), static_cast<int>(min_y), box_w, box_h);
-                    result.confidence = confidence;
-                    result.class_id = class_id;
-                    result.color_id = color_id;
-                    result.polygon = polygon;
-                    detections_.push_back(result);
+        // 预计算每个通道的反量化乘子，避免热循环中的取模和ldexp。
+        std::vector<float> dequant_scale(channel_count, 1.0f);
+        if (props.quantiType != NONE) {
+            if (use_scale) {
+                const int scale_len = props.scale.scaleLen > 0 ? props.scale.scaleLen : 1;
+                for (int c = 0; c < channel_count; ++c) {
+                    const int scale_idx = (scale_len > 1) ? (c % scale_len) : 0;
+                    dequant_scale[c] = props.scale.scaleData[scale_idx];
+                }
+            } else {
+                const int shift_len = props.shift.shiftLen > 0 ? props.shift.shiftLen : 1;
+                for (int c = 0; c < channel_count; ++c) {
+                    const int shift_idx = (shift_len > 1) ? (c % shift_len) : 0;
+                    dequant_scale[c] = std::ldexp(1.0f, -props.shift.shiftData[shift_idx]);
                 }
             }
         }
+
+        auto* raw_int32 = reinterpret_cast<int32_t*>(output_tensor.sysMem[0].virAddr);
+        auto* raw_int16 = reinterpret_cast<int16_t*>(output_tensor.sysMem[0].virAddr);
+        auto* raw_int8 = reinterpret_cast<int8_t*>(output_tensor.sysMem[0].virAddr);
+        auto* raw_float = reinterpret_cast<float*>(output_tensor.sysMem[0].virAddr);
+
+        const int aligned_nchw_h = aligned_shape.dimensionSize[2];
+        const int aligned_nchw_w = aligned_shape.dimensionSize[3];
+        const float stride = static_cast<float>(input_h_) / static_cast<float>(height);
+        const float inv_x_scale = 1.0f / x_scale_;
+        const float inv_y_scale = 1.0f / y_scale_;
+        const float x_bias = -static_cast<float>(x_shift_) * inv_x_scale;
+        const float y_bias = -static_cast<float>(y_shift_) * inv_y_scale;
+
+#define RUN_DECODE_LOOP(READ_EXPR, INDEX_EXPR) \
+        do { \
+            auto read_value = [&](int c_idx, int h_idx, int w_idx) -> float { \
+                const int index = (INDEX_EXPR); \
+                return (READ_EXPR); \
+            }; \
+            for (int h = 0; h < height; ++h) { \
+                for (int w = 0; w < width; ++w) { \
+                    for (size_t anchor_idx = 0; anchor_idx < anchors.size(); ++anchor_idx) { \
+                        const auto& anchor = anchors[anchor_idx]; \
+                        const int base_c = static_cast<int>(anchor_idx) * OUTPUT_FEATURE_DIM; \
+                        const int obj_c = base_c + 8; \
+                        const float obj_logit = read_value(obj_c, h, w); \
+                        if (obj_logit < obj_logit_thres) { \
+                            continue; \
+                        } \
+                        float confidence = Sigmoid(obj_logit); \
+                        if (confidence < score_threshold_) { \
+                            continue; \
+                        } \
+                        int color_id = 0; \
+                        float best_color_logit = read_value(base_c + 9, h, w); \
+                        for (int i = 1; i < COLOR_CLASS_COUNT; ++i) { \
+                            const float color_logit = read_value(base_c + 9 + i, h, w); \
+                            if (color_logit > best_color_logit) { \
+                                best_color_logit = color_logit; \
+                                color_id = i; \
+                            } \
+                        } \
+                        int class_id = 0; \
+                        float best_class_logit = read_value(base_c + 13, h, w); \
+                        for (int i = 1; i < CLASS_CLASS_COUNT; ++i) { \
+                            const float class_logit = read_value(base_c + 13 + i, h, w); \
+                            if (class_logit > best_class_logit) { \
+                                best_class_logit = class_logit; \
+                                class_id = i; \
+                            } \
+                        } \
+                        confidence *= Sigmoid(best_class_logit); \
+                        if (confidence < score_threshold_) { \
+                            continue; \
+                        } \
+                        std::array<cv::Point2f, 4> points; \
+                        for (int pt = 0; pt < 4; ++pt) { \
+                            const float decoded_x = read_value(base_c + pt * 2, h, w) * static_cast<float>(anchor.first) \
+                                                  + static_cast<float>(w) * stride; \
+                            const float decoded_y = read_value(base_c + pt * 2 + 1, h, w) * static_cast<float>(anchor.second) \
+                                                  + static_cast<float>(h) * stride; \
+                            points[pt] = cv::Point2f( \
+                                decoded_x * inv_x_scale + x_bias, \
+                                decoded_y * inv_y_scale + y_bias); \
+                        } \
+                        std::array<cv::Point2f, 4> polygon = {points[0], points[3], points[2], points[1]}; \
+                        float min_x = polygon[0].x; \
+                        float max_x = polygon[0].x; \
+                        float min_y = polygon[0].y; \
+                        float max_y = polygon[0].y; \
+                        for (int p = 1; p < 4; ++p) { \
+                            min_x = std::min(min_x, polygon[p].x); \
+                            max_x = std::max(max_x, polygon[p].x); \
+                            min_y = std::min(min_y, polygon[p].y); \
+                            max_y = std::max(max_y, polygon[p].y); \
+                        } \
+                        const int box_w = static_cast<int>(max_x - min_x); \
+                        const int box_h = static_cast<int>(max_y - min_y); \
+                        if (box_w <= 0 || box_h <= 0) { \
+                            continue; \
+                        } \
+                        DetectionResult result; \
+                        result.box = cv::Rect(static_cast<int>(min_x), static_cast<int>(min_y), box_w, box_h); \
+                        result.confidence = confidence; \
+                        result.class_id = class_id; \
+                        result.color_id = color_id; \
+                        result.polygon = polygon; \
+                        detections_.push_back(result); \
+                    } \
+                } \
+            } \
+        } while (0)
+
+        if (is_nhwc) {
+            switch (tensor_type) {
+                case HB_DNN_TENSOR_TYPE_S32:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int32[index]) * dequant_scale[c_idx],
+                                    ((h_idx * aligned_w + w_idx) * aligned_c + c_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_S16:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int16[index]) * dequant_scale[c_idx],
+                                    ((h_idx * aligned_w + w_idx) * aligned_c + c_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_S8:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int8[index]) * dequant_scale[c_idx],
+                                    ((h_idx * aligned_w + w_idx) * aligned_c + c_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_F32:
+                    RUN_DECODE_LOOP(raw_float[index],
+                                    ((h_idx * aligned_w + w_idx) * aligned_c + c_idx));
+                    break;
+                default:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int32[index]) * dequant_scale[c_idx],
+                                    ((h_idx * aligned_w + w_idx) * aligned_c + c_idx));
+                    break;
+            }
+        } else {
+            switch (tensor_type) {
+                case HB_DNN_TENSOR_TYPE_S32:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int32[index]) * dequant_scale[c_idx],
+                                    ((c_idx * aligned_nchw_h + h_idx) * aligned_nchw_w + w_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_S16:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int16[index]) * dequant_scale[c_idx],
+                                    ((c_idx * aligned_nchw_h + h_idx) * aligned_nchw_w + w_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_S8:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int8[index]) * dequant_scale[c_idx],
+                                    ((c_idx * aligned_nchw_h + h_idx) * aligned_nchw_w + w_idx));
+                    break;
+                case HB_DNN_TENSOR_TYPE_F32:
+                    RUN_DECODE_LOOP(raw_float[index],
+                                    ((c_idx * aligned_nchw_h + h_idx) * aligned_nchw_w + w_idx));
+                    break;
+                default:
+                    RUN_DECODE_LOOP(static_cast<float>(raw_int32[index]) * dequant_scale[c_idx],
+                                    ((c_idx * aligned_nchw_h + h_idx) * aligned_nchw_w + w_idx));
+                    break;
+            }
+        }
+
+#undef RUN_DECODE_LOOP
     }
 
     // 释放资源实现
@@ -1002,11 +1124,13 @@
         }
         // 保存结果
         cv::imwrite(DEFAULT_OUTPUT_IMAGE_PATH, output_img);
+        std::cout << "Single image detection finished, saved to: " << DEFAULT_OUTPUT_IMAGE_PATH << std::endl;
     #else
         if (!detector.Detect(input_img, output_img)) {
             std::cout << "Detection failed" << std::endl;
             return -1;
         }
+        std::cout << "Single image detection finished (draw disabled)." << std::endl;
     #endif
 
     #else
@@ -1051,6 +1175,16 @@
             }
 
                 writer.write(output_frame);
+            
+    #if ENABLE_DRAW
+            // 显示结果
+            cv::imshow("Real-time Detection", output_frame);
+            
+            // 按'q'退出
+            if (cv::waitKey(1) == 'q') {
+                break;
+            }
+    #endif
         }
         
     #if ENABLE_DRAW

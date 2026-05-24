@@ -86,7 +86,6 @@ void serial_driver_node::serial_read_thread()
           robotData.insert(robotData.begin(), head[0]);
           float lastSpeed = rArray->msg.muzzleSpeed;
           memcpy(rArray->array, robotData.data(), sizeof(rArray->array));
-          rArray->msg.muzzleSpeed = rArray->msg.muzzleSpeed > 15 ? rArray->msg.muzzleSpeed : 15.0;
           if(rArray->msg.muzzleSpeed != lastSpeed)muzzleSpeedFilter.update(rArray->msg.muzzleSpeed);
           // RCLCPP_INFO(get_logger(), "读取串口.");
         }
@@ -135,14 +134,23 @@ void serial_driver_node::robot_callback()
     try
     {
       auto msg = vision_interfaces::msg::Robot();
-      // msg.foe_color=rArray->msg.foeColor==1?1:0;
-      msg.foe_color = 0;
+//msg.foe_color=rArray->msg.foeColor;
+      //msg.foe_color=1; //1打红色，我方蓝，0打蓝色我方红
+      msg.foe_color=0;
       msg.mode = rArray->msg.mode;
       msg.self_yaw = rArray->msg.robotYaw;
       msg.self_pitch = rArray->msg.robotPitch;
-      double muzzle_speed = 15.0;
+      double muzzle_speed = rArray->msg.muzzleSpeed;
+
       muzzleSpeedFilter.get_avg(muzzle_speed);
+      if (muzzle_speed < 1)
+        {
+          muzzle_speed = 11.0;
+        }
       msg.muzzle_speed = muzzle_speed;
+
+
+
       publisher->publish(msg);
 
       geometry_msgs::msg::TransformStamped t;

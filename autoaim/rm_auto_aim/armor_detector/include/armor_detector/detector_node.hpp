@@ -17,13 +17,18 @@
 #include <visualization_msgs/msg/marker_array.hpp>
 
 // STD
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "armor_detector/detector.hpp"
 #include "armor_detector/pnp_solver.hpp"
 #include "auto_aim_interfaces/msg/armors.hpp"
+#include "hik_camera/hik_camera_source.hpp"
 
 namespace rm_auto_aim
 {
@@ -32,9 +37,17 @@ class ArmorDetectorNode : public rclcpp::Node
 {
 public:
   ArmorDetectorNode(const rclcpp::NodeOptions & options);
+  ~ArmorDetectorNode() override;
 
 private:
+  void enqueueImage(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg);
   void imageCallback(const sensor_msgs::msg::Image::ConstSharedPtr img_msg);
+  void inferenceLoop();
+  void processImage(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg);
+  void initPnpSolverFromParams();
+  void startHikInput();
+  void stopHikInput();
+  void captureLoop();
 
   std::unique_ptr<Detector> initDetector();
   std::vector<Armor> detectArmors(const sensor_msgs::msg::Image::ConstSharedPtr & img_msg);
@@ -71,6 +84,24 @@ private:
   // Image subscrpition
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr img_sub_;
 
+  // Direct camera input (non-ROS topic)
+  bool use_hik_sdk_ = false;
+  std::string direct_frame_id_ = "camera_optical_frame";
+  double hik_exposure_time_ = 6000.0;
+  double hik_gain_ = 10.0;
+  int hik_get_timeout_ms_ = 1000;
+  hik_camera::HikCameraSource hik_camera_source_;
+  std::thread capture_thread_;
+  std::atomic<bool> capture_running_{false};
+
+  // Async inference worker (latest frame only)
+  std::thread infer_thread_;
+  std::mutex infer_mutex_;
+  std::condition_variable infer_cv_;
+  sensor_msgs::msg::Image::ConstSharedPtr pending_img_msg_;
+  bool has_pending_img_ = false;
+  std::atomic<bool> infer_running_{false};
+
   // Debug information
   bool debug_;
   int debug_timing_every_n_;
@@ -80,6 +111,7 @@ private:
   image_transport::Publisher result_img_pub_;
 
   int yolo_nms_top_k_ = 300;
+  int yolo_pre_nms_top_k_ = 500;
 };
 
 }  // namespace rm_auto_aim

@@ -84,7 +84,7 @@ void Tracker::update(const Armors::SharedPtr & armors_msg)
 {
   // KF predict
   Eigen::VectorXd ekf_prediction = ekf.predict();
-  RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF predict");
+  //RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF predict");
 
   bool matched = false;
   // Use KF prediction as default target state if no matched armor is found
@@ -147,7 +147,7 @@ void Tracker::update(const Armors::SharedPtr & armors_msg)
       double measured_yaw = orientationToYaw(tracked_armor.pose.orientation);
       measurement = Eigen::Vector4d(p.x, p.y, p.z, measured_yaw);
       target_state = ekf.update(measurement);
-      RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF update");
+      //RCLCPP_DEBUG(rclcpp::get_logger("armor_tracker"), "EKF update");
     } else if (same_id_armors_count == 1 && yaw_diff > max_match_yaw_diff_) {
       // Matched armor not found, but there is only one armor with the same id
       // and yaw has jumped, take this case as the target is spinning and armor jumped
